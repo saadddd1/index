@@ -22,16 +22,19 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        # cache: gradle (Temporarily disabled due to GitHub cache API 400 errors)
+        # cache: gradle (Temporarily disabled)
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: '8.4'
-        # cache-disabled: true
+        cache-disabled: true
         
+    - name: Generate Wrapper
+      run: gradle wrapper --gradle-version 8.4 --no-daemon
+
     - name: Build APK (Debug version)
-      run: gradle :app:assembleDebug --stacktrace --info
+      run: ./gradlew :app:assembleDebug --stacktrace --info --warning-mode all --no-build-cache --no-daemon
       
     - name: Upload APK to Actions Tab
       uses: actions/upload-artifact@v4
