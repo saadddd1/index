@@ -1,3 +1,0 @@
-<resources>
-    <string name="accessibility_service_description">启用后，当您在微信或支付宝消费时，应用将安全地在本地提取支付金额并添加至待确认清单。数据绝不上传。</string>
-</resources>
