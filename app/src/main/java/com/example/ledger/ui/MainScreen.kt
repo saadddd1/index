@@ -515,27 +515,65 @@ fun OverviewContent(items: List<Item>, allBills: List<AutoBill>, modifier: Modif
         totalDailyCost += (netCost / daysPassed)
     }
 
-    // 账单统计：按天、月、年进行简单规约
+    // 账单统计：恢复高性能的按区间总和映射表
     val dailyFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
     val monthFormat = remember { SimpleDateFormat("yyyy-MM", Locale.getDefault()) }
     val yearFormat = remember { SimpleDateFormat("yyyy", Locale.getDefault()) }
 
-    val cal = Calendar.getInstance()
-    // 获取当天的字符串 Key
-    val todayKey = dailyFormat.format(cal.time)
-    val monthKey = monthFormat.format(cal.time)
-    val yearKey = yearFormat.format(cal.time)
-
-    var todaySum = 0.0
-    var monthSum = 0.0
-    var yearSum = 0.0
-
-    allBills.forEach { bill ->
-        val date = Date(bill.timestampMillis)
-        if (dailyFormat.format(date) == todayKey) todaySum += bill.amount
-        if (monthFormat.format(date) == monthKey) monthSum += bill.amount
-        if (yearFormat.format(date) == yearKey) yearSum += bill.amount
+    val dailySums = remember(allBills) {
+        val map = mutableMapOf<String, Double>()
+        allBills.forEach { bill ->
+            val key = dailyFormat.format(Date(bill.timestampMillis))
+            map[key] = (map[key] ?: 0.0) + bill.amount
+        }
+        map
     }
+
+    val monthlySums = remember(allBills) {
+        val map = mutableMapOf<String, Double>()
+        allBills.forEach { bill ->
+            val key = monthFormat.format(Date(bill.timestampMillis))
+            map[key] = (map[key] ?: 0.0) + bill.amount
+        }
+        map
+    }
+
+    val yearlySums = remember(allBills) {
+        val map = mutableMapOf<String, Double>()
+        allBills.forEach { bill ->
+            val key = yearFormat.format(Date(bill.timestampMillis))
+            map[key] = (map[key] ?: 0.0) + bill.amount
+        }
+        map
+    }
+
+    // 步进器状态
+    var dayOffset by remember { mutableStateOf(0) }
+    var monthOffset by remember { mutableStateOf(0) }
+    var yearOffset by remember { mutableStateOf(0) }
+
+    val cal = Calendar.getInstance()
+
+    // 日计算
+    cal.timeInMillis = nowMillis
+    cal.add(Calendar.DAY_OF_YEAR, dayOffset)
+    val currentDayKey = dailyFormat.format(cal.time)
+    val currentDaySum = dailySums[currentDayKey] ?: 0.0
+    val dayLabel = if (dayOffset == 0) "今日新增记账" else SimpleDateFormat("MM-dd 支出", Locale.getDefault()).format(cal.time)
+
+    // 月计算
+    cal.timeInMillis = nowMillis
+    cal.add(Calendar.MONTH, monthOffset)
+    val currentMonthKey = monthFormat.format(cal.time)
+    val currentMonthSum = monthlySums[currentMonthKey] ?: 0.0
+    val monthLabel = if (monthOffset == 0) "本月累计支出" else SimpleDateFormat("yyyy-MM 支出", Locale.getDefault()).format(cal.time)
+
+    // 年计算
+    cal.timeInMillis = nowMillis
+    cal.add(Calendar.YEAR, yearOffset)
+    val currentYearKey = yearFormat.format(cal.time)
+    val currentYearSum = yearlySums[currentYearKey] ?: 0.0
+    val yearLabel = if (yearOffset == 0) "本年度总花销" else "${currentYearKey}年 总花销"
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -568,18 +606,86 @@ fun OverviewContent(items: List<Item>, allBills: List<AutoBill>, modifier: Modif
 
         item {
             StandardOverviewCard("日常流水大盘") {
-                OverviewRow("今日新增记账", "¥${String.format("%.2f", todaySum)}", IosTextPrimary, 18.sp)
+                SteppableOverviewRow(
+                    label = dayLabel, 
+                    value = "¥${String.format("%.2f", currentDaySum)}", 
+                    valueColor = IosTextPrimary, 
+                    fontSize = 18.sp,
+                    onPrevious = { dayOffset-- },
+                    onNext = if (dayOffset < 0) { { dayOffset++ } } else null
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 Divider(color = IosDivider, thickness = 0.5.dp)
                 Spacer(modifier = Modifier.height(16.dp))
-                OverviewRow("本月累计支出", "¥${String.format("%.2f", monthSum)}", IosRed, 26.sp, true)
+                SteppableOverviewRow(
+                    label = monthLabel, 
+                    value = "¥${String.format("%.2f", currentMonthSum)}", 
+                    valueColor = IosRed, 
+                    fontSize = 26.sp, 
+                    isBold = true,
+                    onPrevious = { monthOffset-- },
+                    onNext = if (monthOffset < 0) { { monthOffset++ } } else null
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 Divider(color = IosDivider, thickness = 0.5.dp)
                 Spacer(modifier = Modifier.height(16.dp))
-                OverviewRow("本年度总花销", "¥${String.format("%.2f", yearSum)}", IosTextPrimary, 18.sp)
+                SteppableOverviewRow(
+                    label = yearLabel, 
+                    value = "¥${String.format("%.2f", currentYearSum)}", 
+                    valueColor = IosTextPrimary, 
+                    fontSize = 18.sp,
+                    onPrevious = { yearOffset-- },
+                    onNext = if (yearOffset < 0) { { yearOffset++ } } else null
+                )
             }
             Spacer(modifier = Modifier.height(24.dp)) // 底部留白
         }
+    }
+}
+
+@Composable
+fun SteppableOverviewRow(
+    label: String, 
+    value: String, 
+    valueColor: Color, 
+    fontSize: androidx.compose.ui.unit.TextUnit, 
+    isBold: Boolean = false,
+    onPrevious: () -> Unit,
+    onNext: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(), 
+        horizontalArrangement = Arrangement.SpaceBetween, 
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onPrevious, modifier = Modifier.size(28.dp)) {
+                Text("◀", fontSize = 14.sp, color = IosTextSecondary)
+            }
+            Text(
+                text = label, 
+                fontFamily = FontFamily.SansSerif, 
+                fontSize = 15.sp, 
+                color = IosTextPrimary,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+            IconButton(
+                onClick = { onNext?.invoke() }, 
+                modifier = Modifier.size(28.dp),
+                enabled = onNext != null
+            ) {
+                if (onNext != null) {
+                    Text("▶", fontSize = 14.sp, color = IosTextSecondary)
+                }
+            }
+        }
+        Text(
+            text = value, 
+            fontFamily = FontFamily.SansSerif, 
+            fontWeight = if (isBold) FontWeight.Black else FontWeight.SemiBold, 
+            fontSize = fontSize, 
+            color = valueColor
+        )
     }
 }
 
