@@ -498,9 +498,8 @@ fun ItemListContent(
 @Composable
 fun OverviewContent(items: List<Item>, allBills: List<AutoBill>, modifier: Modifier = Modifier) {
     val totalSpent = items.sumOf { it.price }
-    val currentTotalValue = items.sumOf { it.residualValue }
-    val netSpend = max(totalSpent - currentTotalValue, 0.0)
-    val valueRetentionRate = if (totalSpent > 0) (currentTotalValue / totalSpent).toFloat() else 0f
+    val totalRecovered = items.filter { it.isSold }.sumOf { it.residualValue }
+    val netSpend = max(totalSpent - totalRecovered, 0.0)
     
     val activeItems = items.count { !it.isSold }
     val soldItems = items.count { it.isSold }
@@ -518,6 +517,19 @@ fun OverviewContent(items: List<Item>, allBills: List<AutoBill>, modifier: Modif
         totalDailyCost += (netCost / daysPassed)
     }
 
+    val cal = Calendar.getInstance()
+    cal.timeInMillis = nowMillis
+    cal.set(Calendar.DAY_OF_YEAR, 1)
+    cal.set(Calendar.HOUR_OF_DAY, 0)
+    cal.clear(Calendar.MINUTE)
+    cal.clear(Calendar.SECOND)
+    cal.clear(Calendar.MILLISECOND)
+    val startOfYear = cal.timeInMillis
+
+    val yearlySum = allBills.filter { it.timestampMillis >= startOfYear }.sumOf { it.amount }
+    val allTimeBillsSum = allBills.sumOf { it.amount }
+
+    // 高性能预计算每日/月/年的总和映射表
     val dailyFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
     val monthFormat = remember { SimpleDateFormat("yyyy-MM", Locale.getDefault()) }
     val yearFormat = remember { SimpleDateFormat("yyyy", Locale.getDefault()) }
@@ -549,237 +561,200 @@ fun OverviewContent(items: List<Item>, allBills: List<AutoBill>, modifier: Modif
         map
     }
 
-    var expenseTab by remember { mutableStateOf(1) } // 0: 日, 1: 月, 2: 年
-    var timeOffset by remember { mutableStateOf(0) }
-
-    LaunchedEffect(expenseTab) { timeOffset = 0 }
-
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Text("资产与折旧雷达", fontSize = 14.sp, color = IosTextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth().padding(start = 4.dp))
-        }
-        item {
-            AssetHealthCard(totalSpent, currentTotalValue, netSpend, valueRetentionRate)
+            Text("资产与折旧概览", fontSize = 13.sp, color = IosTextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         }
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OverviewSmallCard("在役资产", "$activeItems", "件", Modifier.weight(1f))
-                OverviewSmallCard("结清脱手", "$soldItems", "件", Modifier.weight(1f))
-                OverviewSmallCard("日折旧率", "¥${String.format("%.1f", totalDailyCost)}", "/日", Modifier.weight(1f), IosBlue)
+                OverviewSmallCard("投入开销", "¥${String.format("%.2f", totalSpent)}", Modifier.weight(1f))
+                OverviewSmallCard("实际净耗", "¥${String.format("%.2f", netSpend)}", Modifier.weight(1f), IosRed)
+            }
+        }
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OverviewSmallCard("已回血残值", "¥${String.format("%.2f", totalRecovered)}", Modifier.weight(1f), IosBlue)
+                OverviewSmallCard("每日合并折旧", "¥${String.format("%.2f", totalDailyCost)}", Modifier.weight(1f), IosTextPrimary)
+            }
+        }
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OverviewSmallCard("在役资产", "$activeItems 件", Modifier.weight(1f))
+                OverviewSmallCard("结清脱手", "$soldItems 件", Modifier.weight(1f))
             }
         }
 
         item {
             Spacer(modifier = Modifier.height(8.dp))
-            Text("日常自动化流水概览", fontSize = 14.sp, color = IosTextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth().padding(start = 4.dp))
+            Text("日常自动化流水概览", fontSize = 13.sp, color = IosTextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         }
         
         item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = Color(0x0C000000), ambientColor = Color.Transparent),
-                colors = CardDefaults.cardColors(containerColor = IosCardBg),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    
-                    // Segmented Control
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFFF2F2F7), RoundedCornerShape(8.dp))
-                            .padding(3.dp)
-                    ) {
-                        listOf("日流水", "月聚合", "年聚合").forEachIndexed { index, title ->
-                            val isSelected = expenseTab == index
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSelected) IosBg else Color.Transparent)
-                                    .clickable { expenseTab = index }
-                                    .padding(vertical = 6.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = title, 
-                                    fontFamily = FontFamily.SansSerif, 
-                                    fontSize = 13.sp, 
-                                    fontWeight = if(isSelected) FontWeight.SemiBold else FontWeight.Normal, 
-                                    color = if(isSelected) IosTextPrimary else IosTextSecondary
-                                )
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(28.dp))
-                    
-                    // Time Selector
-                    Row(
-                        modifier = Modifier.fillMaxWidth(), 
-                        horizontalArrangement = Arrangement.SpaceBetween, 
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { timeOffset -= 1 }, modifier = Modifier.size(36.dp)) {
-                             Text("←", color = IosBlue, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        
-                        val cal = Calendar.getInstance()
-                        var displayLabel = ""
-                        var sum = 0.0
-                        
-                        when (expenseTab) {
-                            0 -> {
-                                cal.add(Calendar.DAY_OF_YEAR, timeOffset)
-                                displayLabel = SimpleDateFormat("MM月dd日", Locale.getDefault()).format(cal.time)
-                                val key = dailyFormat.format(cal.time)
-                                sum = dailySums[key] ?: 0.0
-                            }
-                            1 -> {
-                                cal.add(Calendar.MONTH, timeOffset)
-                                displayLabel = SimpleDateFormat("yyyy年MM月", Locale.getDefault()).format(cal.time)
-                                val key = monthFormat.format(cal.time)
-                                sum = monthlySums[key] ?: 0.0
-                            }
-                            2 -> {
-                                cal.add(Calendar.YEAR, timeOffset)
-                                displayLabel = SimpleDateFormat("yyyy年", Locale.getDefault()).format(cal.time)
-                                val key = yearFormat.format(cal.time)
-                                sum = yearlySums[key] ?: 0.0
-                            }
-                        }
-                        
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = displayLabel, 
-                                fontFamily = FontFamily.SansSerif, 
-                                fontSize = 15.sp, 
-                                color = IosTextSecondary, 
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "¥${String.format("%.2f", sum)}", 
-                                fontFamily = FontFamily.SansSerif, 
-                                fontSize = 36.sp, 
-                                fontWeight = FontWeight.Black, 
-                                color = IosTextPrimary,
-                                letterSpacing = (-1).sp
-                            )
-                        }
-                        
-                        IconButton(
-                            onClick = { if (timeOffset < 0) timeOffset += 1 }, 
-                            modifier = Modifier.size(36.dp), 
-                            enabled = timeOffset < 0
-                        ) {
-                             Text("→", color = if (timeOffset < 0) IosBlue else IosDivider, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
+            val dayPagerState = rememberPagerState(initialPage = 5000, pageCount = { 10001 })
+            HorizontalPager(
+                state = dayPagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { page ->
+                val offset = page - 5000
+                val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, offset) }
+                val key = dailyFormat.format(cal.time)
+                val sum = dailySums[key] ?: 0.0
+                val displayLabel = SimpleDateFormat("yyyy 年 MM 月 dd 日", Locale.getDefault()).format(cal.time)
+
+                OverviewSwipeCard(
+                    title = "← 左右滑动切换日支出 →",
+                    monthLabel = displayLabel,
+                    value = "¥${String.format("%.2f", sum)}",
+                    valueColor = IosTextPrimary
+                )
+            }
+        }
+
+        item {
+            val monthPagerState = rememberPagerState(initialPage = 1200, pageCount = { 2401 })
+            HorizontalPager(
+                state = monthPagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { page ->
+                val offset = page - 1200
+                val cal = Calendar.getInstance().apply { add(Calendar.MONTH, offset) }
+                val key = monthFormat.format(cal.time)
+                val sum = monthlySums[key] ?: 0.0
+                val displayLabel = SimpleDateFormat("yyyy 年 MM 月", Locale.getDefault()).format(cal.time)
+
+                OverviewSwipeCard(
+                    title = "← 左右滑动切换月支出 →",
+                    monthLabel = displayLabel,
+                    value = "¥${String.format("%.2f", sum)}",
+                    valueColor = IosBlue
+                )
+            }
+        }
+
+        item {
+            val yearPagerState = rememberPagerState(initialPage = 100, pageCount = { 201 })
+            HorizontalPager(
+                state = yearPagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { page ->
+                val offset = page - 100
+                val cal = Calendar.getInstance().apply { add(Calendar.YEAR, offset) }
+                val key = yearFormat.format(cal.time)
+                val sum = yearlySums[key] ?: 0.0
+                val displayLabel = SimpleDateFormat("yyyy 年", Locale.getDefault()).format(cal.time)
+
+                OverviewSwipeCard(
+                    title = "← 左右滑动切换年支出 →",
+                    monthLabel = displayLabel,
+                    value = "¥${String.format("%.2f", sum)}",
+                    valueColor = IosRed
+                )
             }
         }
     }
 }
 
 @Composable
-fun AssetHealthCard(total: Double, retained: Double, lost: Double, rate: Float) {
-    val animatedRate by animateFloatAsState(
-        targetValue = rate, 
-        animationSpec = tween(durationMillis = 1500, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-        label = "rateAnimation"
-    )
+fun OverviewSwipeCard(title: String, monthLabel: String, value: String, valueColor: Color = IosTextPrimary) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = Color(0x0C000000), ambientColor = Color.Transparent),
+            .shadow(
+                elevation = 8.dp, 
+                shape = RoundedCornerShape(16.dp), 
+                spotColor = Color(0x0C000000), 
+                ambientColor = Color.Transparent
+            ),
         colors = CardDefaults.cardColors(containerColor = IosCardBg),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(24.dp).fillMaxWidth(), 
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier.size(105.dp), 
-                contentAlignment = Alignment.Center
-            ) {
-                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawArc(
-                        color = Color(0xFFF2F2F7),
-                        startAngle = 0f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 14.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = IosBlue,
-                        startAngle = -90f,
-                        sweepAngle = 360f * animatedRate,
-                        useCenter = false,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 14.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                    )
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "${(animatedRate * 100).toInt()}%", 
-                        fontFamily = FontFamily.SansSerif, 
-                        fontSize = 24.sp, 
-                        fontWeight = FontWeight.Black, 
-                        color = IosTextPrimary
-                    )
-                    Text(
-                        text = "存值率", 
-                        fontFamily = FontFamily.SansSerif, 
-                        fontSize = 11.sp, 
-                        color = IosTextSecondary, 
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(32.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("生硬总投入", fontFamily = FontFamily.SansSerif, fontSize = 12.sp, color = IosTextSecondary)
-                Text("¥${String.format("%.0f", total)}", fontFamily = FontFamily.SansSerif, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = IosTextPrimary)
-                Spacer(modifier = Modifier.height(14.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("残值/回血", fontFamily = FontFamily.SansSerif, fontSize = 11.sp, color = IosTextSecondary)
-                        Text("¥${String.format("%.0f", retained)}", fontFamily = FontFamily.SansSerif, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = IosBlue)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("买单净耗", fontFamily = FontFamily.SansSerif, fontSize = 11.sp, color = IosTextSecondary)
-                        Text("¥${String.format("%.0f", lost)}", fontFamily = FontFamily.SansSerif, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = IosRed)
-                    }
-                }
-            }
+        Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = title, 
+                fontFamily = FontFamily.SansSerif, 
+                color = IosTextSecondary, 
+                fontSize = 12.sp,
+                lineHeight = 1.5.em
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = monthLabel,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.SemiBold,
+                color = IosTextPrimary,
+                fontSize = 17.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = value, 
+                fontFamily = FontFamily.SansSerif, 
+                fontWeight = FontWeight.Bold, 
+                fontSize = 32.sp, 
+                color = valueColor,
+                lineHeight = 1.5.em
+            )
         }
     }
 }
 
 @Composable
-fun OverviewSmallCard(title: String, value: String, unit: String, modifier: Modifier = Modifier, valueColor: Color = IosTextPrimary) {
+fun OverviewCard(title: String, value: String, valueColor: Color = IosTextPrimary) {
     Card(
-        modifier = modifier.shadow(8.dp, RoundedCornerShape(16.dp), spotColor = Color(0x0C000000), ambientColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(
+                elevation = 8.dp, 
+                shape = RoundedCornerShape(16.dp), 
+                spotColor = Color(0x0C000000), 
+                ambientColor = Color.Transparent
+            ),
         colors = CardDefaults.cardColors(containerColor = IosCardBg),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(), 
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(title, fontFamily = FontFamily.SansSerif, color = IosTextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(value, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, fontSize = 22.sp, color = valueColor)
-                Spacer(modifier = Modifier.width(2.dp))
-                Text(unit, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 11.sp, color = IosTextSecondary, modifier = Modifier.padding(bottom = 3.dp))
-            }
+        Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = title, 
+                fontFamily = FontFamily.SansSerif, 
+                color = IosTextSecondary, 
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 1.5.em
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = value, 
+                fontFamily = FontFamily.SansSerif, 
+                fontWeight = FontWeight.SemiBold, 
+                fontSize = 24.sp, 
+                color = valueColor,
+                textAlign = TextAlign.Center,
+                lineHeight = 1.5.em
+            )
+        }
+    }
+}
+
+@Composable
+fun OverviewSmallCard(title: String, value: String, modifier: Modifier = Modifier, valueColor: Color = IosTextPrimary) {
+    Card(
+        modifier = modifier
+            .shadow(
+                elevation = 8.dp, 
+                shape = RoundedCornerShape(16.dp), 
+                spotColor = Color(0x0A000000), 
+                ambientColor = Color.Transparent
+            ),
+        colors = CardDefaults.cardColors(containerColor = IosCardBg),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, fontFamily = FontFamily.SansSerif, color = IosTextSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(value, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = valueColor, textAlign = TextAlign.Center)
         }
     }
 }
