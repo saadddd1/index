@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">用于辅助抓取微信和支付宝内部的转账、红包、及支付凭证以实现更精准的自动记账功能。</string>
+</resources>
