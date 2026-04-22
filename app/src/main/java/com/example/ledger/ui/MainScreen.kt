@@ -38,7 +38,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.example.ledger.data.AppDatabase
 import com.example.ledger.data.AutoBill
 import com.example.ledger.data.Item
@@ -74,6 +76,15 @@ fun isNotificationListenerEnabled(context: Context): Boolean {
         "enabled_notification_listeners"
     ) ?: return false
     return enabledListeners.contains(packageName)
+}
+
+fun isAccessibilityServiceEnabled(context: Context): Boolean {
+    val componentName = android.content.ComponentName(context, com.example.ledger.service.PaymentAccessibilityService::class.java)
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    return enabledServices.contains(componentName.flattenToString())
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -243,28 +254,28 @@ fun AutoRecordContent(
     context: Context,
     modifier: Modifier = Modifier
 ) {
-    var isEnabled by remember { mutableStateOf(isNotificationListenerEnabled(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isNotifEnabled by remember { mutableStateOf(isNotificationListenerEnabled(context)) }
+    var isA11yEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
 
     // Resume effect to refresh the state when coming back from settings
-    DisposableEffect(context) {
-        val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                super.onChange(selfChange)
-                isEnabled = isNotificationListenerEnabled(context)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isNotifEnabled = isNotificationListenerEnabled(context)
+                isA11yEnabled = isAccessibilityServiceEnabled(context)
             }
         }
-        context.contentResolver.registerContentObserver(
-            Settings.Secure.getUriFor("enabled_notification_listeners"),
-            false,
-            observer
-        )
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            context.contentResolver.unregisterContentObserver(observer)
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
+    val showPermissionCard = !isNotifEnabled || !isA11yEnabled
+
     Column(modifier = modifier.fillMaxSize()) {
-        if (!isEnabled) {
+        if (showPermissionCard) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -280,29 +291,59 @@ fun AutoRecordContent(
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp).fillMaxSize(), 
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp).fillMaxSize(), 
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "需开启通知读取权限以自动记录主流平台账单",
-                        fontFamily = FontFamily.SansSerif,
-                        fontSize = 15.sp,
-                        color = IosTextSecondary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Button(
-                        onClick = { 
-                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                            context.startActivity(intent)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = IosBlue.copy(alpha = 0.1f), contentColor = IosBlue),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
-                    ) {
-                        Text("前往系统设置激活", fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold)
+                    // Notification Engine Row
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("通知读取引擎", fontFamily = FontFamily.SansSerif, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = IosTextPrimary)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("扫码外卖/打车等常规账单", fontFamily = FontFamily.SansSerif, fontSize = 13.sp, color = IosTextSecondary)
+                        }
+                        if (isNotifEnabled) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Check, contentDescription = null, tint = IosGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("已就绪", fontFamily = FontFamily.SansSerif, color = IosGreen, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                        } else {
+                            Button(
+                                onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+                                colors = ButtonDefaults.buttonColors(containerColor = IosBlue.copy(alpha = 0.1f), contentColor = IosBlue),
+                                elevation = ButtonDefaults.buttonElevation(0.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                            ) {
+                                Text("去开启", fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                    
+                    Divider(color = IosDivider, thickness = 0.5.dp)
+
+                    // Accessibility Engine Row
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("无障碍深度引擎", fontFamily = FontFamily.SansSerif, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = IosTextPrimary)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("微信红包/转账强力抓取", fontFamily = FontFamily.SansSerif, fontSize = 13.sp, color = IosTextSecondary)
+                        }
+                        if (isA11yEnabled) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Check, contentDescription = null, tint = IosGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("已就绪", fontFamily = FontFamily.SansSerif, color = IosGreen, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                        } else {
+                            Button(
+                                onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                                colors = ButtonDefaults.buttonColors(containerColor = IosBlue.copy(alpha = 0.1f), contentColor = IosBlue),
+                                elevation = ButtonDefaults.buttonElevation(0.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                            ) {
+                                Text("去开启", fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                 }
             }
